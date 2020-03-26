@@ -1,4 +1,3 @@
-# uda-spark
 # Sparkify项目报告
 ## 项目简介
 该项目是优达毕业项目。数据集是一个音乐服务的用户日志，包含了用户信息，歌曲信息，用户活动，时间戳等。大小128M。需要通过数据集中信息，预测出可能流失的用户，以便后续对相应用户采取挽留措施
@@ -30,10 +29,9 @@ spark=SparkSession.builder.getOrCreate()
 
 ### 2.加载与清洗数据
 #### 加载数据集
-（bz2的待会处理。。。。。。。。)
-数据集是json格式，使用以下方法加载数据
+数据集是json格式，由于文件过大，免费版github不支持上传。将文件压缩。
 ```python
-spark.read.json('mini_sparkify_event_data.json')
+df=spark.read.json('mini_sparkify_event_data.json.bz2')
 ```
 #### 评估数据集
 对数据集评估思路是：先查看整体情况，再查看重点希望了解的列的情况。
@@ -58,16 +56,16 @@ spark.read.json('mini_sparkify_event_data.json')
  |-- sessionId: long (页面ID)
  |-- song: string (歌名)
  |-- status: long (含义暂不明确)
- |-- ts: long (结合这个是日志信息，推测是当前事件时间)
+ |-- ts: long (含义暂不明确)
  |-- userAgent: string (用户使用平台信息)
  |-- userId: string (用户ID)
 
 ```
 
-对某一列进行查看的方法如下：
-2、通过dropDuplicates()去重查看唯一值，同时通过show(5)展示
+2、对某一列进行查看的方法如下：
+通过dropDuplicates()去重查看唯一值；sort对于有数值的进行排序
 ```python
-df.select('userId').dropDuplicates().sort('userId').show(5)
+df.select('userId').dropDuplicates().sort('userId').show()
 ```
 ```python
 +------+
@@ -82,179 +80,129 @@ df.select('userId').dropDuplicates().sort('userId').show(5)
 only showing top 5 rows
 ```
 通过对各列进行查看，我们发现：
-1、userId列存在非NA的空值，需要删除
-2、registration、ts应该是时间戳，直观上无逻辑上含义，列名也不直观易懂。需新建两列，重命名列名，并转换为日期格式。因后续涉及构造变量，原long类型数据列暂时保留。
+userId列存在非NA的空值，需要删除
+
 
 #### 清理数据集
 ##### 处理空值
 先通过dropna()，处理userId列空值；
 
 ```python
-df_valid=df.dropna(how="any",subset=["userId","sessionId"])
+df_clean=df.dropna(how="any",subset=["userId","sessionId"])
 ```
 再通过filter(), 去除有空字符的行.
 
 ```python
-df_valid=df_valid.filter(df["userId"]!="")
-```
-##### 转换时间戳格式
-建立转换用的lambda函数，使用fromtimestamp，将时间戳转换成字符串日期时间。
-```python
-convert_ts=udf(lambda x:datetime.datetime.fromtimestamp(x/1000.0).strftime("%Y-%m-%d %H:%M:%S"))
-df_valid=df_valid.withColumn('event_time',convert_ts('ts'))
-df_valid=df_valid.withColumn('registration_time',convert_ts('registration'))
+df_clean=df_clean.filter(df["userId"]!="")
 ```
 ### 3.探索性数据分析
 ##### 建立注销客户的标签
 项目提示使用churn作为模型的标签, 并且建议使用Cancellation Confirmation事件来定义客户流失.。
 1、标记注销事件：新建一列churn_event列，标记page中的Cancellation Confirmation事件
-2、标记注销用户：新建一列churn列，标记注销用户。具体方法是，只要用户churn_event中有标记注销，该用户所有的churn列均标记为注销
+2、标记注销用户：新建一列churn_user列，标记注销用户。具体方法是，只要用户churn_event中有标记注销，该用户所有的churn列均标记为注销
 
 ##### 建立注销客户的标签
-定义好客户流失后, 进行探索性数据分析, 观察留存用户和流失用户的行为。绘图观察主要使用了直方图、箱线图、小提琴图。相比箱线图，小提琴图更能看出密度分布
-1、注销与用户听歌数量的关系
+定义好客户流失后, 进行探索性数据分析, 观察留存用户和流失用户的行为。绘图观察主要使用了直方图、小提琴图。相比箱线图，小提琴图更能看出密度分布
+1、注销与用户添加播放列表数量的关系
 
 ```python
-#提取NextSong数据，查看用户听歌数量的分布
-lifetime_songs=df_valid.where('page=="NextSong"').groupby(['userId','churn']).count().toPandas()
+#提取Add to Playlist数据，查看用户添加至播放列表数量的分布
+lifetime_songs=df_clean.where('page=="Add to Playlist"').groupby(['userId','churn_user']).count().toPandas()
 ```
 
 ```python
 #绘制小提琴图
-ax=sns.violinplot(data=lifetime_songs,x='churn',y='count')
+ax=sns.violinplot(data=lifetime_songs,x='churn_user',y='count')
 ```
-* 相比于非注销用户，注销用户听歌的数量较少，且数量的分布相对集中，其小提琴图形相对扁平
+* 相比于非注销用户，注销用户将歌曲添加至播放列表的数量较少，且数量的分布相对集中，其小提琴图形相对扁平
 
-2、是否注销与单次听歌数量关系
+2、是否注销与添加好友数量关系
 
 ```python
-#提取NextSong数据，观察同一sessionId下听歌平均数量的分布
-avg_songs_listened=df_valid.where('page=="NextSong"').groupby(['churn', 'userId' ,'sessionId']).count().groupby(['churn','userId']).agg({'count':'avg'}).toPandas()
-```
-
-```python
-#绘制小提琴图
-ax=sns.violinplot('churn',y='avg(count)',data=avg_songs_listened)
-```
-* 相比于非注销用户，大部分注销用户同一sessionId下听歌的数量较少
-
-3、是否注销与用户点赞量关系
-
-```python
-#提取humbs Up数据，观察用户点赞数量分布
-a=df_valid.where('page=="Thumbs Up"').groupby(['userId','churn']).count().toPandas()
+#提取Add Friend数据，观察用户添加好友分布
+add_friend=df_clean.where('page=="Add Friend"').groupby(['userId','churn_user']).count().toPandas()
 ```
 
 ```python
 #绘制小提琴图
-ax=sns.violinplot(data=a,x='churn',y='count')
+ax=sns.violinplot(data=add_friend,x='churn_user',y='count')
 ```
-* 相比于非注销用户，注销用户点赞的数量较少，且数量的分布相对集中
+* 相比于非注销用户，注销用户添加好友的数量大多处于较低水平；非注销用户添加好友数量从高水平到低水平均有分布，且非注销用户添加好友数量最大值远远大于注销用户的最大值
 
-4、是否注销与性别关系
+
+3、是否注销与性别关系
 
 ```python
 #提取性别与用户ID列，观察注销与性别间关系
-gender_churn=df_valid.dropDuplicates(["userId","gender"]).groupby(["churn","gender"]).count().toPandas()
+gender_churn=df_clean.dropDuplicates(["userId","gender"]).groupby(["churn_user","gender"]).count().toPandas()
 ```
 
 ```python
 #绘制直方图
-ax=sns.barplot(x='gender',y='count',hue='churn',data=gender_churn)
+ax=sns.barplot(x='gender',y='count',hue='churn_user',data=gender_churn)
 ```
 *  男性用户注销账户的绝对人数以及比例均比女性大
 
-5、注销与用户存留天数关系
-```python
-#通过事件时间与注册时间差，计算截止事件发生，已经经历了多少时间；取其中最大的时间，便是用户注册至最后一次食用的时间，也即存留时间；最后将时间单位转换为天
-user_lifetime=df_valid.select('userId','registration','ts','churn').withColumn('lifetime',(df_valid.ts-df_valid.registration)).groupBy('userId','churn').agg({'lifetime':'max'}).withColumnRenamed('max(lifetime)','lifetime').select('userId','churn',(col('lifetime')/1000/3600/24).alias('lifetime')).toPandas()
-```
-
-```python
-#绘制箱线图
-ax=sns.boxplot(data=user_lifetime,x='churn',y='lifetime') 
-```
-* 注销用户的存留天数更少
 
 ### 4.构建预特征
 #### 变量选择
 结合经验及以上的分析，构建以下变量：
 1、听歌情况方面的变量：
-（1）**用户听歌数量**：听歌数量越大，说明用户愿意使用该服务，注销几率越小。以上绘图分析也显示：注销用户听歌数量较未注销的少
-（2）**用户单次（同一sessionId）听歌平均数量**：单次听歌数量越大，说明用户愿意使用该服务，注销几率越小。以上绘图分析也显示：注销用户单次听歌平均数量较未注销的少
-（3）**播放的歌手数量**：播放过的歌手数量越多，侧面说明用户听歌越多，越愿意使用该服务，注销几率越小。
-（4）**歌曲时长总量**：听歌时长越长，说明用户倾向于使用该服务，注销几率越小。
-
+* 用户听歌数量：听歌数量越大，说明用户愿意使用该服务，注销几率越小。
+* 用户单次（同一sessionId）听歌最大数量：单次听歌数量越大，说明用户愿意使用该服务，注销几率越小
+* 播放的歌手数量：播放过的歌手数量越多，侧面说明用户听歌越多，越愿意使用该服务，注销几率越小。
 2、从page中提取动作建立变量：
-（1）点赞量：点赞越多，说明用户喜欢该服务，注销几率越小。以上绘图分析也显示：注销用户点赞数量较未注销的少
-（2）差评量：逻辑与点赞量恰好相反
-（3）添加播放列表量：用户将歌曲加进播放列表，一般可说明用户喜欢该音乐；添加的量越多，用户愿意使用该服务的可能性越大，注销可能性越小。
-（4）添加好友量：添加好友量越多，说明用于越愿意在改服务中交友分享，注销几率越小。
+* 差评量：差评越多，说明用户不喜欢该服务，注销几率越大。
+* 添加播放列表量：用户将歌曲加进播放列表，一般可说明用户喜欢该音乐；添加的量越多，用户愿意使用该服务的可能性越大，注销可能性越小。
+* 添加好友量：添加好友量越多，说明用于越愿意在改服务中交友分享，注销几率越小。
+3、其他
+* 用户等级：用户曾经有付费，说明用户对该服务还是感兴趣的，注销几率相对小
 
-3、其他变量：
-（1）性别：以上绘图分析显示：男性用户注销的数量较女性多。推测是改服务更能吸引女性
-（2）用户存留天数：一般来说，服务越吸引了用户，则用户存留越久，注销几率越小。以上绘图分析也显示：注销用户存留天数较未注销的短
 
 #### 变量提取
 1用户听歌数量
-获取每个用户听过歌曲的歌名信息计数，获得用户听歌数量
+获取每个用户点击页面NextSong的数量信息计数，获得用户添加进播放列表数量
 ```python
-f2=df_valid.select('userID','song').groupBy('userID').count().withColumnRenamed('count','total_songs')
+feature_1=df_clean.select('userId','page').where(df_clean.page=="NextSong").groupBy('userId').count().withColumnRenamed('count','song_total')
 ```
 
-2用户单次（同一sessionId）听歌平均数量
-获取每个sessionId点击页面NextSong数量信息并计数，并按用户求均值，可获得用户单次（同一sessionId）听歌平均数量
+2用户单次（同一sessionId）听歌最大数量
+获取每个sessionId点击页面NextSong数量信息并计数，并按用户求最大值，可获得用户单次（同一sessionId）听歌最大数量
 ```python
-f8=df_valid.where('page=="NextSong"').groupBy('userId','sessionId').count().groupBy(['userId']).agg({'count':'avg'}).withColumnRenamed('avg(count)','avg_songs_played')
+feature_5=df_clean.where('page=="NextSong"').groupBy('userId','sessionId').count().groupBy(['userId']).agg({'count':'max'}).withColumnRenamed('max(count)','max_songs_played')
 ```
 
 3播放的歌手数量
 #获取每个用户点击页面NextSong时的artist信息并计数，可获得用户听过的歌手数量
 ```python
-f10=df_valid.filter(df_valid.page=="NextSong").select("userID","artist").dropDuplicates().groupby("userId").count().withColumnRenamed("count","artist_count")
+feature_6=df_clean.filter(df_clean.page=="NextSong").select("userId","artist").dropDuplicates().groupby("userId").count().withColumnRenamed("count","artist_total")
 ```
 
-4歌曲时长总量
-每个用户播放时长累加
-```python
-f7=df_valid.select('userID','length').groupBy('userID').sum().withColumnRenamed('sum(length)','listen_time')
-```
-
-5点赞量
-获取每个用户点击页面Thumbs Up的数量信息计数，可获得用户点赞量
-```python
-f3=df_valid.select('userID','page').where(df_valid.page=='Thumbs Up').groupBy('userID').count().withColumnRenamed('count','num_thumb_up')
-```
-
-6差评量
+4差评量
 获取每个用户点击页面Thumbs Down的数量信息计数，可获得用户差评量
 ```python
-f4=df_valid.select('userId','page').where(df_valid.page=='Thumbs Down').groupBy('userId').count().withColumnRenamed('count','num_thumb_down')
+feature_4=df_clean.select('userID','page').where(df_clean.page=='Thumbs Down').groupBy('userId').count().withColumnRenamed('count','Thumbs Down')
 ```
 
-7添加播放列表量
+5添加播放列表量
 获取每个用户点击页面Add to Playlist的数量信息计数，可获得用户添加进播放列表数量
 ```python
-f5=df_valid.select('userID','page').where(df_valid.page=='Add to Playlist').groupBy('userID').count().withColumnRenamed('count','add_to_playlist')
+feature_2=df_clean.select('userId','page').where(df_clean.page=='Add to Playlist').groupBy('userId').count().withColumnRenamed('count','add_to_playlist')
+```
+6添加好友量
+获取每个用户点击页面Add Friend的数量信息计数，可获得用户添加好友书量
+```python
+feature_3=df_clean.select('userId','page').where(df_clean.page=='Add Friend').groupBy('userId').count().withColumnRenamed('count','add_friend')
+```
+7是否曾经付费/等级
+将level中free/paid转换为0/1；只有用户曾经付费，标记为1
+
+```python
+windowval_feature=Window.partitionBy('userId')
+feature_7=df_clean.select('userId','level').replace(['free', 'paid'],['0','1'],'level').select('userId', col('level').cast('int'))
+feature_7=feature_7.withColumn('level_max',max('level').over(windowval_feature)).drop('level').dropDuplicates()
 ```
 
-8添加好友量
-```python
-#获取每个用户点击页面Add Friend的数量信息计数，可获得用户添加好友书量
-f6=df_valid.select('userID','page').where(df_valid.page=='Add Friend').groupBy('userID').count().withColumnRenamed('count','add_friend')
-```
-
-9性别
-取gender列，把F、M变量转为0、1，方便模型计算
-```python
-f9=df_valid.select("userId","gender").dropDuplicates().replace(['paid','free'],['0','1'],'gender').select('userId',col('gender').cast('int'))
-```
-
-10用户存留天数
-用注册时间（registration）与动作发生时间（ts）相减，并取出最长的时间，便是用户存留天数
-```python
-f1=df_valid.select('userId','registration','ts').withColumn('lifetime',(df_valid.ts-df_valid.registration)).groupBy('userId').agg({'lifetime':'max'}).withColumnRenamed('max(lifetime)','lifetime').select('userId',(col('lifetime')/1000/3600/24).alias('lifetime'))
-```
 整理标签列
 后续建模时，真实标记列默认为label列，将churn列重命名为label
 
@@ -262,20 +210,25 @@ f1=df_valid.select('userId','registration','ts').withColumn('lifetime',(df_valid
 label=df_valid.select('userId',col('churn').alias('label')).dropDuplicates()
 ```
 #### 变量聚合
-通过join将变量连接，同时用0填充为空数据；此外，userID列是索引非变量，合并后需删除
+1、通过join将变量连接，选用并集
 ```python
-data=f1.join(f2,'userID','outer')\
-    .join(f3,'userID','outer')\
-    .join(f4,'userID','outer')\
-    .join(f5,'userID','outer')\
-    .join(f6,'userID','outer')\
-    .join(f7,'userID','outer')\
-    .join(f8,'userID','outer')\
-    .join(f9,'userID','outer')\
-    .join(f10,'userID','outer')\
-    .join(label,'userID','outer')\
-    .drop('userID')\
-    .fillna(0)
+df_feature=feature_1.join(feature_2,'userId','outer')\
+    .join(feature_3,'userId','outer')\
+    .join(feature_4,'userId','outer')\
+    .join(feature_5,'userId','outer')\
+    .join(feature_6,'userId','outer')\
+    .join(feature_7,'userId','outer')\
+    .join(label,'userId','outer')
+```
+2、无值的，用0填充
+
+```python
+df_feature=df_feature.fillna(0)
+```
+3、删除索引
+
+```python
+df_feature=df_feature.drop('userId')
 ```
 
 ### 5.建模预测
@@ -284,51 +237,32 @@ data=f1.join(f2,'userID','outer')\
 将数据转换为向量形式，标准化，并分成训练集、测试集和验证集
 ```python
 #用VectorAssembler将数据集转换为可供模型计算的结构（向量形式）
-cols=["lifetime","total_songs","num_thumb_up","num_thumb_down","add_to_playlist","add_friend","listen_time","avg_songs_played","gender","artist_count"]
-assembler=VectorAssembler(inputCols=cols,outputCol="NumFeatures")
-data=assembler.transform(data)
+cols=["song_total","add_to_playlist","add_friend","Thumbs Down","max_songs_played","artist_total","level_max"]
+assembler=VectorAssembler(inputCols=cols,outputCol="features_vec")
+df_feature=assembler.transform(df_feature)
 
 #用StandardScaler标准化数据
-scaler=StandardScaler(inputCol="NumFeatures",outputCol="features",withStd=True)
-scalerModel=scaler.fit(data)
-data=scalerModel.transform(data)
+scaler=StandardScaler(inputCol="features_vec",outputCol="features",withStd=True)
+scalerModel=scaler.fit(df_feature)
+df_feature=scalerModel.transform(df_feature)
 
 #按60%，40%，40%比例拆分为训练集、测试集和验证集
 train,validation,test=data.randomSplit([0.6,0.2,0.2],seed=42)
 ```
 #### 模型选择
 **模型选择思路**
-* 以全0/全1预测作为基线，机器学习算法的分数应该比全0/全1预测更高
 * 选用逻辑回归、支持向量机、随机森林进行对比，这几个模型一般不需要很多参数调整就可以达到不错的效果。他们的优缺点如下：
 1、逻辑回归：优点：计算速度快，容易理解；缺点：容易产生欠拟合
 2、支持向量机：数据量较小情况下解决机器学习问题，可以解决非线性问题。缺点：对缺失数据敏感
 3、随机森林：优点：有抗过拟合能力。通过平均决策树，降低过拟合的风险性。缺点：大量的树结构会占用大量的空间和利用大量时间
 
 **模型训练**
-* Baseline Model（全1/全0）
-
-```python
-#对测试集进行预测，预测全为1
-results_base_all_1=test.withColumn('prediction',lit(1.0))#prediction列全是1
-evaluator=MulticlassClassificationEvaluator(predictionCol='prediction')
-print('Test set metrics')
-print('Accuracy:{}'.format(evaluator.evaluate(results_base_all_1,{evaluator.metricName:"accuracy"})))
-print('F-1 Score:{}'.format(evaluator.evaluate(results_base_all_1,{evaluator.metricName:"f1"})))
-```
-
-```python
-#对测试集进行预测，预测全为0
-results_base_all_0=test.withColumn('prediction',lit(0.0))#'prediction列全是0
-evaluator=MulticlassClassificationEvaluator(predictionCol='prediction')
-print('Test set metrics')
-print('Accuracy:{}'.format(evaluator.evaluate(results_base_all_0,{evaluator.metricName:"accuracy"})))
-print('F-1 Score:{}'.format(evaluator.evaluate(results_base_all_0,{evaluator.metricName:"f1"})))
 ```
 * Random Forest
 
 ```python
 #创建并训练模型，通过time()记录训练时间
-rf=RandomForestClassifier()#初始化
+rf=RandomForestClassifier(seed=42)#初始化
 start=time()#开始时间
 model_rf=rf.fit(train)#训练
 end=time()#结束时间
@@ -337,19 +271,18 @@ print('The training process took{} second'.format(end-start))
 #验证模型效果
 results_rf=model_rf.transform(validation)#验证集上预测
 evaluator=MulticlassClassificationEvaluator(predictionCol="prediction")#评分器
-print('Random Forest Metrics:')
-print('Accuracy:{}'.format(evaluator.evaluate(results_rf,{evaluator.metricName:"accuracy"})))#计算Accuracy
+print('Random Forest:')
 print('F-1 Score:{}'.format(evaluator.evaluate(results_rf,{evaluator.metricName:"f1"})))#计算F-1 Score
 ```
 
 * LogisticRegression、LinearSVC
-逻辑回归、支持向量机模型代码与随机森林与结构基本一致，主要是需要将代码改为对应模型外；以及设置迭代次数（均设置为10次）
+逻辑回归、支持向量机模型代码与随机森林与结构基本一致，主要是需要将代码改为对应模型
 
 **计算结果**
-* LogisticRegression模型：Accuracy为0.7959；F-1 Score为0.7871；耗时87s
-* LinearSVC模型：Accuracy为0.7959；F-1 Score为0.7054；耗时170s
-* Random Forest模型：Accuracy0.8163；F-1 Score0.7912；耗时150s
-Random Forest的Accuracy及F-1 Score均最高，LogisticRegression耗时最小。考虑到Random Forest的训练耗时与LogisticRegression的训练耗时整体来说相差并非十分大，而我们希望获得效果更好的模型，故选用Random Forest模型，并通过调节模型参数获取更优模型
+* LogisticRegression模型：F-1 Score为0.7096；耗时121s
+* LinearSVC模型：F-1 Score为0.7096；耗时214s
+* Random Forest模型：F-1 Score0.7096；耗时215s
+LogisticRegression、Random Forest的F-1 Score一致，且较LinearSVC的高。为了避免过拟合，选取Random Forest作为最终模型，选用并通过调节模型参数尝试获取更优模型
 
 #### 模型调优
 **调优思路**
@@ -362,7 +295,7 @@ Random Forest的Accuracy及F-1 Score均最高，LogisticRegression耗时最小�
 ```python
 rf=RandomForestClassifier()#初始化模型
 f1_evaluator=MulticlassClassificationEvaluator(metricName='f1')#选用f1-score来衡量优劣
-paramGrid=ParamGridBuilder().addGrid(rf.maxDepth,[3,5]).addGrid(rf.numTrees,[20,50]).build()#建立可选参数的网络，主要对maxDepth、numTrees调整
+paramGrid=ParamGridBuilder().addGrid(rf.maxDepth,[10,20]).addGrid(rf.numTrees,[50,100]).build()#建立可选参数的网络，主要对maxDepth、numTrees调整
 crossval_rf=CrossValidator(estimator=rf,
         estimatorParamMaps=paramGrid,
         evaluator=f1_evaluator,
@@ -370,47 +303,35 @@ crossval_rf=CrossValidator(estimator=rf,
 cvModel_rf=crossval_rf.fit(train)#训练
 ```
 **调整结果**
-比调优前后的模型在验证集上预测结果：调优前Accuracy0.8163；F-1 Score0.7912；调优后Accuracy为0.8235，F-1 Score为0.796，分别提升了XXX%及XXX%。
-（跑一次再补------------------------）
+* 对比调优前后的模型在验证集上预测结果，调优前F-1 Score0.7096；调优后F-1 Score:0.7227，F-1 Score有提升
+* 使用调优后模型进行最终预测
 
 
 #### 对测试集预测
-使用优化前及优化后的模型，同时对测试集进行预测
+在测试集预测
 
 ```python
-#使用未优化模型预测
-results_final=model_rf.transform(test)
+results_final=cvModel_rf.transform(test)
 evaluator=MulticlassClassificationEvaluator(predictionCol="prediction")
-print('Test set metricd:')
+print('Test:')
 print('Accuracy:{}'.format(evaluator.evaluate(results_final,{evaluator.metricName:"accuracy"})))
 print('F-1 Score:{}'.format(evaluator.evaluate(results_final,{evaluator.metricName:"f1"})))
 ```
 
-```python
-#使用最佳模型预测
-results_final_best=cvModel_rf.transform(test)
-evaluator=MulticlassClassificationEvaluator(predictionCol="prediction")
-print('Test set metricd:')
-print('Accuracy:{}'.format(evaluator.evaluate(results_final_best,{evaluator.metricName:"accuracy"})))
-print('F-1 Score:{}'.format(evaluator.evaluate(results_final_best,{evaluator.metricName:"f1"})))
-```
-。预测结果Accuracy为0.8235，F-1 Score为0.796，相比基线模型（Accuracy:0.7059；F-1 Score:0.584）分别有XXX%及XXX%提升。
-（这里要改，先跑一次）
+在测试集上运算后：F-1 Score:0.6591，和在验证集的结果上相比，F-1 Score有下降。模型存在在过拟合
 
 ### 6.结论汇总
 #### 总结&反思
 **过程总结**
 * 这个项目中，我们建立了一个预测流失用户的模型。
-* 在数据集中，我们删除了没有用户ID的数据，将时间戳转为人们可读的格式；此外对流失用户建立了标识，并结合对特征与是否流失间关系的探索，并建立了10个特征
+* 在数据集中，我们删除了没有用户ID和sessionID的数据；对流失用户建立了标识，并结合对特征与是否流失间关系的探索，并建立了7个特征
 * 然后我们选择3个模型：逻辑回归，SVM和随机森林进行比较。根据比较结果。选择了随机森林预测最后结果。
-* 接着我们使用交叉验证和参数网络搜索调优随机森林的参数，对测试集进行预测。预测结果Accuracy为0.8235，F-1 Score为0.796，相比基线模型（Accuracy:0.7059；F-1 Score:0.584）分别有XXX%及XXX%提升。
+* 接着我们使用交叉验证和参数网络搜索调优随机森林的参数，对测试集进行预测。预测结果F-1 Score:0.6591
 
 **过程反思**
-* 构建合适的特征对于建立好的模型十分重要。而数据集中，现成的可用于预测的特征并不多；我们需要重新构造特征来预测流失用户。而从数据集中构造变量一方面需要经验与知识的积累，一方面需要熟悉手上的数据
-* 对比各未经优化的模型间Accuracy及F-1 Score，对于Accuracy各模型相差不大，LogisticRegression及Random Forest的F-1 Score相近。后续想有较大幅度提升，可能需要进一步优化特征选取
+* 对比各未经优化的模型间F-1 Score，各模型相差不大。后续想有较大幅度提升，除了选取更优模型，更多可能需要从创建更合适的特征变量入手
+* 数据集中，现成的可用于预测的特征并不多；我们需要重新构造特征来预测流失用户。而从数据集中构造变量，除了需要探索、熟悉手上的数据；还需要经验与知识的积累
 #### 改进
-1、数据量方面：相对原始数据而言，这个只是一个相对较小的数据集。如果增加数据量，可以得到预测效果更好的模型
-
-2、特征方面：用于预测流失用户的特征进一步增加完善，找到与数据集相关性更强的特征，以提升模型性能。如增加用户注销账户时的的等级作为特征；或者对未理解未探索的特征进一步研究
-
-3、模型方面：选用决策树、梯度提升树等其他算法，对比已使用的算法，观察accuracy与f1分数变化
+1、该数据集放在现实中，数据量并不大。如果进一步增加数据量，可以得到预测效果更好的模型
+2、用于预测流失用户的特征进一步增加完善，找到与数据集相关性更强的特征，以提升模型性能。如增加用户注销账户时的的等级作为特征；或者对未理解未探索的特征进一步研究
+3、选用决策树、梯度提升树等其他算法，观察accuracy与f1分数变化，对比已使用的算法，选取更优模型
