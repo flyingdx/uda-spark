@@ -5,22 +5,22 @@
 
 ## 项目思路
 为了预测可能流失的用户，对日志进行分析，探索并提取与用户流失相关的变量；根据变量，使用Spark建立机器学习模型进行预测。具如下：
-1.加载所需的库并实例化
-2.加载与清洗数据
-3.探索性数据分析
-4.构建预特征
-5.建模预测
-6.结论汇总
+* 1.加载所需的库并实例化
+* 2.加载与清洗数据
+* 3.探索性数据分析
+* 4.构建预特征
+* 5.建模预测
+* 6.结论汇总
 
 ## 项目实现
 ### 1.加载所需的库并实例化
 #### 加载所需的库：
 项目会用到一下库
-1、pyspark.sql：spark中进行类似SQL中的操作
-2、pyspark.ml：spark中进行机器学习
-3、pandas 、numpy：对dataframe进行操作
-4、matplotlib、seaborn： 绘图
-5、time：记录代码块运行时间的库
+* 1、pyspark.sql：spark中进行类似SQL中的操作
+* 2、pyspark.ml：spark中进行机器学习
+* 3、pandas 、numpy：对dataframe进行操作
+* 4、matplotlib、seaborn： 绘图
+* 5、time：记录代码块运行时间的库
 
 #### 实例化
 ```python
@@ -35,10 +35,10 @@ df=spark.read.json('mini_sparkify_event_data.json.bz2')
 ```
 #### 评估数据集
 对数据集评估思路是：先查看整体情况，再查看重点希望了解的列的情况。
-1、查看整体情况的方法如下：
-（1）查看数据前几行的值，了解数据集概况，对数据集有整体认识。主要使用了.show()函数
-（2）查看列数、每列的名称以及类型，并结合以上了解每列的含义。主要使用.printSchema()函数
-（3）查看数据行数。主要使用.count()函数
+* 1、查看整体情况的方法如下：
+* （1）查看数据前几行的值，了解数据集概况，对数据集有整体认识。主要使用了.show()函数
+* （2）查看列数、每列的名称以及类型，并结合以上了解每列的含义。主要使用.printSchema()函数
+* （3）查看数据行数。主要使用.count()函数
 通过以上观察，我们可了解到：数据集共有286500行,18列；主要包含了用户信息，歌曲信息，用户活动，时间戳等信息。变量含义如下：
 ```python
  |-- artist: string (歌手)
@@ -63,7 +63,7 @@ df=spark.read.json('mini_sparkify_event_data.json.bz2')
 ```
 
 2、对某一列进行查看的方法如下：
-通过dropDuplicates()去重查看唯一值；sort对于有数值的进行排序
+* 通过dropDuplicates()去重查看唯一值；sort对于有数值的进行排序
 ```python
 df.select('userId').dropDuplicates().sort('userId').show()
 ```
@@ -79,8 +79,7 @@ df.select('userId').dropDuplicates().sort('userId').show()
 +------+
 only showing top 5 rows
 ```
-通过对各列进行查看，我们发现：
-userId列存在非NA的空值，需要删除
+通过对各列进行查看，我们发现：userId列存在非NA的空值，需要删除
 
 
 #### 清理数据集
@@ -97,12 +96,13 @@ df_clean=df_clean.filter(df["userId"]!="")
 ```
 ### 3.探索性数据分析
 ##### 建立注销客户的标签
-项目提示使用churn作为模型的标签, 并且建议使用Cancellation Confirmation事件来定义客户流失.。
-1、标记注销事件：新建一列churn_event列，标记page中的Cancellation Confirmation事件
-2、标记注销用户：新建一列churn_user列，标记注销用户。具体方法是，只要用户churn_event中有标记注销，该用户所有的churn列均标记为注销
+* 项目提示使用churn作为模型的标签, 并且建议使用Cancellation Confirmation事件来定义客户流失.。
+* 1、标记注销事件：新建一列churn_event列，标记page中的Cancellation Confirmation事件
+* 2、标记注销用户：新建一列churn_user列，标记注销用户。具体方法是，只要用户churn_event中有标记注销，该用户所有的churn列均标记为注销
 
 ##### 建立注销客户的标签
 定义好客户流失后, 进行探索性数据分析, 观察留存用户和流失用户的行为。绘图观察主要使用了直方图、小提琴图。相比箱线图，小提琴图更能看出密度分布
+
 1、注销与用户添加播放列表数量的关系
 
 ```python
